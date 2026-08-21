@@ -7,7 +7,7 @@ const policy = loadPolicy();
 
 const observeBrain = tool({
   name: 'observe_brain',
-  description: 'Send normalized observations to the existing Brain and return its response. Never execute trades.',
+  description: 'Send normalized live observations to the NeoFL Brain and return its response.',
   parameters: z.object({
     observation: z.record(z.string(), z.unknown()),
   }),
@@ -16,19 +16,17 @@ const observeBrain = tool({
 
 const requestBrainDecision = tool({
   name: 'request_brain_decision',
-  description: 'Ask the existing Brain engine for a decision from normalized observations. This tool never submits an order.',
+  description: 'Ask the NeoFL Brain engine for a decision from normalized live observations.',
   parameters: z.object({
     context: z.record(z.string(), z.unknown()),
   }),
   execute: async ({ context }) => brainDecision({ context, mode: policy.mode }),
 });
 
-const executionGate = tool({
-  name: 'request_execution_authorization',
-  description: 'Ask Admin whether execution is authorized. This is a gate only and does not place an order.',
-  parameters: z.object({
-    capability: z.string(),
-  }),
+const executionStatus = tool({
+  name: 'execution_status',
+  description: 'Return Admin execution authorization state for diagnostics. MT5 MCP tools remain the execution interface.',
+  parameters: z.object({ capability: z.string().default('trade.execute') }),
   execute: async ({ capability }) => ({
     authorized: executionAllowed(policy) && await adminAuthorize(capability),
     mode: policy.mode,
@@ -37,28 +35,37 @@ const executionGate = tool({
 
 export async function buildAgent() {
   const mcpUrl = process.env.MCP_URL;
-  let mcpServers: MCPServerStreamableHttp[] = [];
+  const mcpServers: MCPServerStreamableHttp[] = [];
 
   if (mcpUrl) {
+    const headers: Record<string, string> = {};
+    if (process.env.MCP_TOKEN) headers.Authorization = `Bearer ${process.env.MCP_TOKEN}`;
+
     const mcp = new MCPServerStreamableHttp({
       url: mcpUrl,
-      name: process.env.MCP_NAME ?? 'NeoFL MCP',
+      name: process.env.MCP_NAME ?? 'NeoFL MT5 Live Terminal',
+      requestInit: { headers },
+      cacheToolsList: false,
+      timeout: Number(process.env.MCP_TIMEOUT_MS ?? 15000),
+      maxRetryAttempts: 3,
     });
     await mcp.connect();
-    mcpServers = [mcp];
+    mcpServers.push(mcp);
   }
 
   return new Agent({
     name: 'NeoFLGPT Parallel Agent',
     instructions: [
       'You are the agentic orchestration layer around the NeoFL Brain engine.',
-      'Observe before deciding. Use MCP for authorized data and tools when available.',
-      'Use the Brain engine for normalized observations and decisions.',
-      'Never invent market data, account state, fills, or tool results.',
-      'Never place an order directly. Execution requires the Admin authorization gate and the downstream execution system.',
+      'Operate from live observations. Observe the account and market before deciding.',
+      'Use the MT5 MCP server for live account, symbol, market, position, order and trading capabilities when connected.',
+      'Use the NeoFL Brain for normalized observations and strategic decisions.',
+      'The MT5 MCP trading tools are the execution interface. When the Brain decides to trade, use the appropriate MT5 MCP tool and then inspect the returned execution result.',
+      'Never invent market data, account state, fills, order tickets, or tool results.',
+      'After an execution result, feed the result back into the Brain and reassess the live state.',
       `Current operating mode: ${policy.mode}.`,
     ].join(' '),
-    tools: [observeBrain, requestBrainDecision, executionGate],
+    tools: [observeBrain, requestBrainDecision, executionStatus],
     mcpServers,
     mcpConfig: { includeServerInToolNames: true },
   });
