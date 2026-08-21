@@ -1,0 +1,55 @@
+import { z } from 'zod';
+
+const Json = z.record(z.string(), z.unknown());
+
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required`);
+  return value.replace(/\/$/, '');
+}
+
+export async function adminAuthorize(capability: string): Promise<boolean> {
+  const base = required('ADMIN_GATEWAY_URL');
+  const token = required('ADMIN_GATEWAY_TOKEN');
+  const response = await fetch(`${base}/api/v1/agent/authorize`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ capability }),
+  });
+  if (!response.ok) return false;
+  const body = await response.json();
+  return body?.authorized === true;
+}
+
+export async function brainInput(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const base = required('BRAIN_URL');
+  const token = process.env.BRAIN_TOKEN;
+  const response = await fetch(`${base}/api/v1/brain/input`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Brain input failed (${response.status}): ${text.slice(0, 500)}`);
+  const parsed: unknown = JSON.parse(text);
+  return Json.parse(parsed);
+}
+
+export async function brainDecision(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const base = required('BRAIN_URL');
+  const token = process.env.BRAIN_TOKEN;
+  const response = await fetch(`${base}/api/v1/brain/decision`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Brain decision failed (${response.status}): ${text.slice(0, 500)}`);
+  return Json.parse(JSON.parse(text));
+}
