@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { accountDetails, accountList, mt5AccountDetails } from './gateway.js';
+import { accountDetails, accountList, dhanAccountDetails, mt5AccountDetails } from './gateway.js';
 import { runAgent } from './agent.js';
 
 const port = Number(process.env.PORT ?? 3000);
@@ -20,8 +20,6 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    // Dashboard account read API. These are read-only; broker credentials never
-    // leave the server and MT5 is data-only in this runtime.
     if (req.method === 'GET' && req.url === '/api/dashboard/accounts') {
       json(res, 200, await accountList());
       return;
@@ -37,6 +35,12 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && parts.length === 5 && parts[0] === 'api' && parts[1] === 'dashboard' && parts[2] === 'accounts' && parts[4] === 'mt5') {
       const accountId = decodeURIComponent(parts[3]);
       json(res, 200, await mt5AccountDetails(accountId));
+      return;
+    }
+
+    if (req.method === 'GET' && parts.length === 5 && parts[0] === 'api' && parts[1] === 'dashboard' && parts[2] === 'accounts' && parts[4] === 'dhan') {
+      const accountId = decodeURIComponent(parts[3]);
+      json(res, 200, await dhanAccountDetails(accountId));
       return;
     }
 
