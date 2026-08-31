@@ -1,68 +1,58 @@
 # NeoFLGPT Parallel
 
-Agentic orchestration layer around the NeoFL Brain engine.
-
-The runtime uses the OpenAI Agents SDK for the agent loop, tools, guardrails, and MCP integration. The Brain remains the reasoning/trading engine; this layer adds observation, planning, tool use, and the Admin authorization boundary.
+Agentic orchestration layer around the NeoFL Brain engine, now integrated with the open-source TradingAgents multi-agent research framework.
 
 ## Architecture
 
 ```text
-                         ADMIN DOCK
+                         ADMIN / POLICY
                               |
-                   authorization / policy
-                              |
-                    AGENTIC ORCHESTRATOR
+                   AGENTIC ORCHESTRATOR
                               |
                  observe -> reason -> act
                               |
-                 +------------+------------+
-                 |                         |
-          ALPACA MCP                 NEOFL BRAIN
-                 |                         |
-       market data + trading       strategy / decisions
-                 |                         |
-                 +------------+------------+
-                              |
-                       execution gate
-                              |
-                         MT5 EA / API
-                              |
-                      actual broker account
-                              |
-                         feedback loop
-                              |
-                         Brain / Agent
+             +----------------+----------------+
+             |                                 |
+        ALPACA MCP                     NEOFL BRAIN
+             |                                 |
+    market data + trading              strategy / decisions
+             |                                 |
+             +---------------+-----------------+
+                             |
+                     TRADINGAGENTS
+                     research branch
+                             |
+              market / news / social / fundamentals
+                             |
+                    analysis + cross-check
+                             |
+                        execution gate
+                             |
+                           ALPACA
 ```
 
 ### Roles
 
-- **Alpaca MCP** is the primary external market-data and trading API when enabled. The official Alpaca MCP server exposes account, trading, market-data and related toolsets. urlAlpaca MCP Serverhttps://github.com/alpacahq/alpaca-mcp-server
-- **NeoFL Brain** remains the reasoning/trading decision engine.
-- **MT5 EA/API** remains the broker-account bridge. It receives authorized instructions and returns actual account, order, position, fill and execution state.
-- **Feedback is mandatory:** execution results must be reconciled with actual state before another action is taken.
+- **Alpaca MCP** is the primary and authoritative external market-data and trade-execution API when enabled. The official Alpaca MCP server exposes account, trading, market-data and related toolsets.
+- **NeoFL Brain** remains the strategy/reasoning engine.
+- **TradingAgents** is integrated as an independent multi-agent research and cross-checking branch. It can produce market, social, news and fundamentals analysis and a five-tier research signal, but it has no order-execution capability in this integration.
+- **Execution is Alpaca-only.** No MT5 market-data or execution bridge is part of this runtime.
+- **Feedback is mandatory:** after an execution result, actual Alpaca account/order/position/fill state must be reconciled before another action is taken.
 
-### Rules
+## TradingAgents bridge
 
-- `MCP_URL` is optional for an external Streamable HTTP MCP gateway.
-- `ALPACA_MCP_ENABLED=true` enables the official Alpaca MCP server locally through `uvx alpaca-mcp-server`.
-- `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` are runtime secrets and must never be committed to GitHub.
-- `ALPACA_TOOLSETS` can restrict the Alpaca MCP toolsets; the official server enables all toolsets by default. citeturn0search0turn0search3
-- `ADMIN_GATEWAY_URL` and `ADMIN_GATEWAY_TOKEN` authorize privileged capabilities.
-- `BRAIN_URL` points to the actual Brain deployment and is supplied through environment configuration; no deployment URL is hard-coded.
-- `AGENT_MODE` defaults to `observe`.
-- Live execution requires both `AGENT_MODE=live` and `ALLOW_EXECUTION=true`, plus Admin authorization.
-- Never invent market data, account state, fills, order tickets, or tool results.
-- Do not store provider keys in source control.
+`services/tradingagents_bridge` pins the upstream TradingAgents repository to commit `2448d0a12576f9b2ddcd5980a0630833423d1e1b` and exposes a small internal HTTP API:
 
-## Alpaca MCP
+- `GET /health`
+- `POST /analyze`
 
-The runtime uses the OpenAI Agents SDK `MCPServerStdio` transport to launch the Alpaca MCP server locally. The SDK supports stdio MCP servers using `command`, `args`, and `env`, which matches the official Alpaca setup pattern. citeturn2search0
+The bridge is analysis-only. It does not expose order placement, account mutation, or broker credentials to the TradingAgents graph.
 
-The repository contains a safe template at `config/alpaca.mcp.example.json`. It contains placeholders only; real credentials belong in deployment/runtime environment variables.
+The NeoFL agent adds a `tradingagents_analysis` tool only when `TRADINGAGENTS_URL` is configured. The orchestration layer can therefore compare TradingAgents research with NeoFL Brain reasoning before an action is authorized.
 
 ## Environment
 
-Copy `.env.example` into the runtime environment and provide real values through the deployment secret store.
+Copy `.env.example` into the runtime environment and provide real secrets through the deployment secret store. Never commit API keys.
 
 ```text
 OPENAI_API_KEY=...
@@ -81,6 +71,14 @@ ALPACA_SECRET_KEY=<alpaca-secret-key>
 ALPACA_TOOLSETS=account,trading,stock-data,options-data,crypto-data
 ALPACA_MCP_COMMAND=uvx
 ALPACA_MCP_TIMEOUT_MS=20000
+
+TRADINGAGENTS_URL=http://tradingagents:8000
+TRADINGAGENTS_TOKEN=<optional-bridge-token>
+TRADINGAGENTS_TIMEOUT_MS=120000
+TRADINGAGENTS_BRIDGE_TOKEN=<optional-bridge-token>
+TRADINGAGENTS_LLM_PROVIDER=openai
+TRADINGAGENTS_DEEP_THINK_LLM=gpt-5.6
+TRADINGAGENTS_QUICK_THINK_LLM=gpt-5.6-luna
 
 AGENT_MODE=observe
 ALLOW_EXECUTION=false
@@ -101,4 +99,14 @@ Health: `GET /health`
 
 Agent: `POST /agent/run` with `{ "input": "..." }`.
 
-The repository keeps provider credentials and deployment URLs outside source control. No stale Vercel/AppDeploy URLs are embedded.
+## Private Tailnet deployment
+
+The intended deployment is a private Tailscale tailnet. Tailscale Serve can expose the local NeoFL service to devices on the tailnet over HTTPS while keeping the service off the public internet.
+
+```bash
+docker compose -f docker-compose.tailnet.yml up -d --build
+tailscale serve --bg 3000
+tailscale serve status
+```
+
+The service remains bound to localhost on the host; Tailscale Serve provides the tailnet-facing HTTPS endpoint. Do not use Tailscale Funnel for the trading runtime.
