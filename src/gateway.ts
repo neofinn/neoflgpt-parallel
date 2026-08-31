@@ -8,21 +8,6 @@ function required(name: string): string {
   return value.replace(/\/$/, '');
 }
 
-async function postJson(base: string, path: string, payload: Record<string, unknown>, token?: string, timeoutMs = 30000) {
-  const response = await fetch(`${base}${path}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`Request failed (${response.status}): ${text.slice(0, 500)}`);
-  return Json.parse(JSON.parse(text));
-}
-
 export async function adminAuthorize(capability: string): Promise<boolean> {
   const base = required('ADMIN_GATEWAY_URL');
   const token = required('ADMIN_GATEWAY_TOKEN');
@@ -36,28 +21,77 @@ export async function adminAuthorize(capability: string): Promise<boolean> {
   return body?.authorized === true;
 }
 
+async function gatewayRequest(path: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const base = required('ADMIN_GATEWAY_URL');
+  const token = required('ADMIN_GATEWAY_TOKEN');
+  const response = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`${path} failed (${response.status}): ${text.slice(0, 500)}`);
+  return Json.parse(JSON.parse(text));
+}
+
+export async function accountList(): Promise<Record<string, unknown>> {
+  return gatewayRequest('/api/v1/accounts/list', {});
+}
+
+export async function accountDetails(accountId: string): Promise<Record<string, unknown>> {
+  return gatewayRequest('/api/v1/accounts/details', { account_id: accountId });
+}
+
+export async function mt5AccountDetails(accountId: string): Promise<Record<string, unknown>> {
+  return gatewayRequest('/api/v1/accounts/mt5/details', { account_id: accountId });
+}
+
 export async function brainInput(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-  return postJson(required('BRAIN_URL'), '/api/v1/brain/input', payload, process.env.BRAIN_TOKEN);
+  const base = required('BRAIN_URL');
+  const token = process.env.BRAIN_TOKEN;
+  const response = await fetch(`${base}/api/v1/brain/input`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Brain input failed (${response.status}): ${text.slice(0, 500)}`);
+  const parsed: unknown = JSON.parse(text);
+  return Json.parse(parsed);
 }
 
 export async function brainDecision(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-  return postJson(required('BRAIN_URL'), '/api/v1/brain/decision', payload, process.env.BRAIN_TOKEN);
+  const base = required('BRAIN_URL');
+  const token = process.env.BRAIN_TOKEN;
+  const response = await fetch(`${base}/api/v1/brain/decision`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Brain decision failed (${response.status}): ${text.slice(0, 500)}`);
+  return Json.parse(JSON.parse(text));
 }
 
-export async function tradingAgentsExecute(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-  return postJson(
-    required('TRADINGAGENTS_URL'),
-    '/execute',
-    payload,
-    process.env.TRADINGAGENTS_TOKEN,
-    Number(process.env.TRADINGAGENTS_TIMEOUT_MS ?? 30000),
-  );
-}
-
-export async function accountsList(): Promise<Record<string, unknown>> {
-  return postJson(required('ACCOUNT_GATEWAY_URL'), '/accounts/list', {}, process.env.ACCOUNT_GATEWAY_TOKEN);
-}
-
-export async function accountState(accountId: string): Promise<Record<string, unknown>> {
-  return postJson(required('ACCOUNT_GATEWAY_URL'), '/accounts/state', { account_id: accountId }, process.env.ACCOUNT_GATEWAY_TOKEN);
+export async function tradingAgentsAnalysis(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const base = required('TRADINGAGENTS_URL');
+  const token = process.env.TRADINGAGENTS_TOKEN;
+  const response = await fetch(`${base}/analyze`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(Number(process.env.TRADINGAGENTS_TIMEOUT_MS ?? 120000)),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`TradingAgents analysis failed (${response.status}): ${text.slice(0, 500)}`);
+  return Json.parse(JSON.parse(text));
 }
