@@ -46,6 +46,10 @@ export async function mt5AccountDetails(accountId: string): Promise<Record<strin
   return gatewayRequest('/api/v1/accounts/mt5/details', { account_id: accountId });
 }
 
+export async function dhanAccountDetails(accountId: string): Promise<Record<string, unknown>> {
+  return gatewayRequest('/api/v1/accounts/dhan/details', { account_id: accountId });
+}
+
 export async function brainInput(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   const base = required('BRAIN_URL');
   const token = process.env.BRAIN_TOKEN;
@@ -59,8 +63,7 @@ export async function brainInput(payload: Record<string, unknown>): Promise<Reco
   });
   const text = await response.text();
   if (!response.ok) throw new Error(`Brain input failed (${response.status}): ${text.slice(0, 500)}`);
-  const parsed: unknown = JSON.parse(text);
-  return Json.parse(parsed);
+  return Json.parse(JSON.parse(text));
 }
 
 export async function brainDecision(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
