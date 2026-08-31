@@ -53,3 +53,20 @@ export async function brainDecision(payload: Record<string, unknown>): Promise<R
   if (!response.ok) throw new Error(`Brain decision failed (${response.status}): ${text.slice(0, 500)}`);
   return Json.parse(JSON.parse(text));
 }
+
+export async function tradingAgentsAnalysis(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const base = required('TRADINGAGENTS_URL');
+  const token = process.env.TRADINGAGENTS_TOKEN;
+  const response = await fetch(`${base}/analyze`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(Number(process.env.TRADINGAGENTS_TIMEOUT_MS ?? 120000)),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`TradingAgents analysis failed (${response.status}): ${text.slice(0, 500)}`);
+  return Json.parse(JSON.parse(text));
+}
