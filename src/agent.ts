@@ -6,7 +6,7 @@ import {
   tool,
 } from '@openai/agents';
 import { z } from 'zod';
-import { adminAuthorize, brainDecision, brainInput, tradingAgentsAnalysis } from './gateway.js';
+import { accountState, adminAuthorize, brainDecision, brainInput, tradingAgentsExecute } from './gateway.js';
 import { executionAllowed, loadPolicy } from './policy.js';
 
 const policy = loadPolicy();
@@ -14,42 +14,63 @@ type LocalMcpServer = MCPServerStdio | MCPServerStreamableHttp;
 
 const observeBrain = tool({
   name: 'observe_brain',
-  description: 'Send normalized live observations to the NeoFL Brain and return its response.',
+  description: 'Send normalized live observations to the NeoFL Brain. The Brain analyzes independently and does not execute trades.',
   parameters: z.object({ observation: z.record(z.string(), z.unknown()) }),
   execute: async ({ observation }) => brainInput({ observation, mode: policy.mode }),
 });
 
 const requestBrainDecision = tool({
   name: 'request_brain_decision',
-  description: 'Ask the NeoFL Brain engine for a decision from normalized live observations.',
+  description: 'Ask the NeoFL Brain for an independent analysis/trading decision. The Brain returns an order intent; it does not execute it.',
   parameters: z.object({ context: z.record(z.string(), z.unknown()) }),
   execute: async ({ context }) => brainDecision({ context, mode: policy.mode }),
 });
 
-const requestTradingAgentsAnalysis = tool({
-  name: 'tradingagents_analysis',
-  description: 'Run the TradingAgents multi-agent research graph as an independent market-analysis opinion. This is analysis only; it cannot place orders.',
+const getAccountState = tool({
+  name: 'get_account_state',
+  description: 'Read the current state of a connected account. Dashboard account mode controls whether the account is data-only or trading-enabled.',
+  parameters: z.object({ account_id: z.string().min(1) }),
+  execute: async ({ account_id }) => accountState(account_id),
+});
+
+const sendOrderToTradingAgents = tool({
+  name: 'send_order_to_tradingagents',
+  description: 'Send a NeoFL Brain order intent to the TradingAgents execution engine for a dashboard-selected trading-enabled account. Never use this for data-only accounts.',
   parameters: z.object({
-    ticker: z.string(),
-    trade_date: z.string(),
-    asset_type: z.enum(['stock', 'crypto']).default('stock'),
-    analysts: z.array(z.enum(['market', 'social', 'news', 'fundamentals'])).default(['market', 'social', 'news', 'fundamentals']),
+    account_id: z.string().min(1),
+    symbol: z.string().min(1),
+    side: z.enum(['buy', 'sell']),
+    quantity: z.number().positive(),
+    order_type: z.enum(['market', 'limit', 'stop', 'stop_limit']).default('market'),
+    limit_price: z.number().positive().optional(),
+    stop_price: z.number().positive().optional(),
+    time_in_force: z.enum(['day', 'gtc', 'opg', 'cls', 'ioc', 'fok']).default('day'),
+    client_order_id: z.string().optional(),
+    brain_reason: z.string().optional(),
   }),
-  execute: async ({ ticker, trade_date, asset_type, analysts }) => tradingAgentsAnalysis({
-    ticker,
-    trade_date,
-    asset_type,
-    analysts,
-  }),
+  execute: async (order) => {
+    if (!executionAllowed(policy)) {
+      return { accepted: false, reason: 'Execution disabled by runtime policy', mode: policy.mode };
+    }
+    const authorized = await adminAuthorize('trade.execute');
+    if (!authorized) return { accepted: false, reason: 'Admin authorization denied' };
+
+    return tradingAgentsExecute({
+      ...order,
+      source: 'NeoFL Brain',
+      execution_engine: 'TradingAgents',
+    });
+  },
 });
 
 const executionStatus = tool({
   name: 'execution_status',
-  description: 'Return Admin execution authorization state. Alpaca is the sole external market-data and trade-execution interface.',
+  description: 'Return Admin execution authorization state for TradingAgents execution.',
   parameters: z.object({ capability: z.string().default('trade.execute') }),
   execute: async ({ capability }) => ({
     authorized: executionAllowed(policy) && await adminAuthorize(capability),
     mode: policy.mode,
+    execution_engine: 'TradingAgents',
   }),
 });
 
@@ -98,24 +119,22 @@ export async function buildAgent() {
     mcpServers.push(alpaca);
   }
 
-  const tools = [observeBrain, requestBrainDecision, executionStatus];
-  if (process.env.TRADINGAGENTS_URL) tools.splice(2, 0, requestTradingAgentsAnalysis);
-
   return new Agent({
     name: 'NeoFLGPT Parallel Agent',
     instructions: [
-      'You are the agentic orchestration layer around the NeoFL Brain engine.',
-      'Operate from live observations. Observe market and account state before deciding.',
-      'Use Alpaca MCP as the primary and authoritative external market-data and trading API when connected.',
-      'Use the NeoFL Brain for normalized observations and strategic decisions.',
-      'TradingAgents is an independent research/analysis branch. Use it for multi-agent market analysis and cross-checking, never as an execution interface.',
-      'Alpaca is the execution interface. Do not route orders through MT5 or any MT5 bridge.',
-      'Never invent market data, account state, fills, order tickets, or tool results.',
-      'After every execution result, feed the actual result back into the Brain and reassess the live state.',
-      'Reconcile actual Alpaca account, order, position and fill state before acting again.',
+      'You are the agentic orchestration layer around the NeoFL Brain.',
+      'Connected accounts are managed by the dashboard. Every account has an explicit mode: DATA_ONLY or TRADING.',
+      'DATA_ONLY accounts may provide market/account data for analysis but must never receive an order.',
+      'TRADING accounts may receive orders only through the TradingAgents execution engine after authorization.',
+      'The NeoFL Brain is analysis-only. It independently observes data, reasons, creates an order intent, and sends that intent to TradingAgents for execution.',
+      'TradingAgents is the execution engine in this architecture. It is responsible for validating the order intent, submitting it to the selected connected account API, and returning the actual broker response.',
+      'Alpaca is the connected-account API/broker interface when an account is an Alpaca account. Do not use MT5.',
+      'Never invent market data, account state, fills, order tickets, or execution results.',
+      'Before sending an order, verify the target account is explicitly trading-enabled and obtain current account state.',
+      'After execution, reconcile the returned order/fill/account state and feed the actual result back to the NeoFL Brain for the next analysis cycle.',
       `Current operating mode: ${policy.mode}.`,
     ].join(' '),
-    tools,
+    tools: [observeBrain, requestBrainDecision, getAccountState, sendOrderToTradingAgents, executionStatus],
     mcpServers,
     mcpConfig: { includeServerInToolNames: true },
   });
