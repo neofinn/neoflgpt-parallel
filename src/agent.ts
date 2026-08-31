@@ -6,7 +6,7 @@ import {
   tool,
 } from '@openai/agents';
 import { z } from 'zod';
-import { adminAuthorize, brainDecision, brainInput } from './gateway.js';
+import { adminAuthorize, brainDecision, brainInput, tradingAgentsAnalysis } from './gateway.js';
 import { executionAllowed, loadPolicy } from './policy.js';
 
 const policy = loadPolicy();
@@ -26,9 +26,26 @@ const requestBrainDecision = tool({
   execute: async ({ context }) => brainDecision({ context, mode: policy.mode }),
 });
 
+const requestTradingAgentsAnalysis = tool({
+  name: 'tradingagents_analysis',
+  description: 'Run the TradingAgents multi-agent research graph as an independent market-analysis opinion. This is analysis only; it cannot place orders.',
+  parameters: z.object({
+    ticker: z.string(),
+    trade_date: z.string(),
+    asset_type: z.enum(['stock', 'crypto']).default('stock'),
+    analysts: z.array(z.enum(['market', 'social', 'news', 'fundamentals'])).default(['market', 'social', 'news', 'fundamentals']),
+  }),
+  execute: async ({ ticker, trade_date, asset_type, analysts }) => tradingAgentsAnalysis({
+    ticker,
+    trade_date,
+    asset_type,
+    analysts,
+  }),
+});
+
 const executionStatus = tool({
   name: 'execution_status',
-  description: 'Return Admin execution authorization state. MT5 EA/API remains the broker-account execution interface.',
+  description: 'Return Admin execution authorization state. Alpaca is the sole external market-data and trade-execution interface.',
   parameters: z.object({ capability: z.string().default('trade.execute') }),
   execute: async ({ capability }) => ({
     authorized: executionAllowed(policy) && await adminAuthorize(capability),
@@ -55,7 +72,6 @@ export async function buildAgent() {
     mcpServers.push(mcp);
   }
 
-  // Official Alpaca MCP server over stdio. Secrets come only from runtime env.
   if (process.env.ALPACA_MCP_ENABLED === 'true') {
     const apiKey = process.env.ALPACA_API_KEY ?? '';
     const secretKey = process.env.ALPACA_SECRET_KEY ?? '';
@@ -82,20 +98,24 @@ export async function buildAgent() {
     mcpServers.push(alpaca);
   }
 
+  const tools = [observeBrain, requestBrainDecision, executionStatus];
+  if (process.env.TRADINGAGENTS_URL) tools.splice(2, 0, requestTradingAgentsAnalysis);
+
   return new Agent({
     name: 'NeoFLGPT Parallel Agent',
     instructions: [
       'You are the agentic orchestration layer around the NeoFL Brain engine.',
       'Operate from live observations. Observe market and account state before deciding.',
-      'Use Alpaca MCP as the primary external market-data and trading API when connected.',
+      'Use Alpaca MCP as the primary and authoritative external market-data and trading API when connected.',
       'Use the NeoFL Brain for normalized observations and strategic decisions.',
-      'MT5 is the broker-account bridge: the MT5 EA/API receives authorized trade instructions and returns actual account, order, position, fill and execution state.',
+      'TradingAgents is an independent research/analysis branch. Use it for multi-agent market analysis and cross-checking, never as an execution interface.',
+      'Alpaca is the execution interface. Do not route orders through MT5 or any MT5 bridge.',
       'Never invent market data, account state, fills, order tickets, or tool results.',
       'After every execution result, feed the actual result back into the Brain and reassess the live state.',
-      'Alpaca and MT5 state must never be assumed identical; reconcile actual returned state before acting again.',
+      'Reconcile actual Alpaca account, order, position and fill state before acting again.',
       `Current operating mode: ${policy.mode}.`,
     ].join(' '),
-    tools: [observeBrain, requestBrainDecision, executionStatus],
+    tools,
     mcpServers,
     mcpConfig: { includeServerInToolNames: true },
   });
