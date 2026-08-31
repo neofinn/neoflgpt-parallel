@@ -1,0 +1,42 @@
+services:
+  neoflgpt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      TRADINGAGENTS_URL: http://tradingagents:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      tradingagents:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tradingagents:
+    build:
+      context: ./services/tradingagents_bridge
+      dockerfile: Dockerfile
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      TRADINGAGENTS_BRIDGE_TOKEN: ${TRADINGAGENTS_BRIDGE_TOKEN:-}
+      TRADINGAGENTS_LLM_PROVIDER: ${TRADINGAGENTS_LLM_PROVIDER:-openai}
+      TRADINGAGENTS_DEEP_THINK_LLM: ${TRADINGAGENTS_DEEP_THINK_LLM:-gpt-5.6}
+      TRADINGAGENTS_QUICK_THINK_LLM: ${TRADINGAGENTS_QUICK_THINK_LLM:-gpt-5.6-luna}
+      TRADINGAGENTS_RESULTS_DIR: /var/lib/tradingagents/logs
+      TRADINGAGENTS_CACHE_DIR: /var/lib/tradingagents/cache
+      TRADINGAGENTS_MEMORY_LOG_PATH: /var/lib/tradingagents/memory/trading_memory.md
+    expose:
+      - "8000"
+    volumes:
+      - tradingagents-data:/var/lib/tradingagents
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  tradingagents-data:
